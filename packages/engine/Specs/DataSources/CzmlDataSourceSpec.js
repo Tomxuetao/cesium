@@ -46,6 +46,7 @@ import {
   LabelStyle,
   ShadowMode,
   VerticalOrigin,
+  Ellipsoid,
 } from "../../index.js";
 
 describe("DataSources/CzmlDataSource", function () {
@@ -148,17 +149,17 @@ describe("DataSources/CzmlDataSource", function () {
     return array.slice(startIndex, startIndex + count);
   }
 
-  function cartesianFromArrayDegrees(array, startIndex) {
+  function cartesianFromArrayDegrees(array, startIndex, ellipsoid) {
     return Cartesian3.fromDegrees.apply(
       null,
-      arraySubset(array, startIndex, 3)
+      [].concat(arraySubset(array, startIndex, 3), ellipsoid)
     );
   }
 
-  function cartesianFromArrayRadians(array, startIndex) {
+  function cartesianFromArrayRadians(array, startIndex, ellipsoid) {
     return Cartesian3.fromRadians.apply(
       null,
-      arraySubset(array, startIndex, 3)
+      [].concat(arraySubset(array, startIndex, 3), ellipsoid)
     );
   }
 
@@ -1317,6 +1318,31 @@ describe("DataSources/CzmlDataSource", function () {
     });
   });
 
+  it("can handle position specified as constant cartographicsDegrees with non-standard ellipsoid", function () {
+    const WGS84 = Ellipsoid.WGS84.clone();
+    Ellipsoid.WGS84 = new Ellipsoid(1737400, 1737400, 1737400);
+    const packet = {
+      position: {
+        cartographicDegrees: [34, 117, 10000],
+      },
+    };
+
+    return CzmlDataSource.load(makeDocument(packet)).then(function (
+      dataSource
+    ) {
+      const entity = dataSource.entities.values[0];
+      const resultCartesian = entity.position.getValue(JulianDate.now());
+      expect(resultCartesian).toEqual(
+        cartesianFromArrayDegrees(
+          packet.position.cartographicDegrees,
+          0,
+          Ellipsoid.WGS84
+        )
+      );
+      Ellipsoid.WGS84 = WGS84;
+    });
+  });
+
   it("can handle position specified as sampled cartographicsDegrees", function () {
     const epoch = JulianDate.now();
 
@@ -1397,7 +1423,30 @@ describe("DataSources/CzmlDataSource", function () {
       );
     });
   });
+  it("can handle position specified as constant cartographicRadians with non-standard ellipsoid", function () {
+    const WGS84 = Ellipsoid.WGS84.clone();
+    Ellipsoid.WGS84 = new Ellipsoid(1737400, 1737400, 1737400);
+    const packet = {
+      position: {
+        cartographicRadians: [1, 2, 10000],
+      },
+    };
 
+    return CzmlDataSource.load(makeDocument(packet)).then(function (
+      dataSource
+    ) {
+      const entity = dataSource.entities.values[0];
+      const resultCartesian = entity.position.getValue(JulianDate.now());
+      expect(resultCartesian).toEqual(
+        cartesianFromArrayRadians(
+          packet.position.cartographicRadians,
+          0,
+          Ellipsoid.WGS84
+        )
+      );
+      Ellipsoid.WGS84 = WGS84;
+    });
+  });
   it("can handle position specified as sampled cartographicRadians", function () {
     const epoch = JulianDate.now();
 
@@ -10073,5 +10122,25 @@ describe("DataSources/CzmlDataSource", function () {
       expect(e.properties.custom_wsenDegrees.getValue(documentStartDate)).toEqual(Rectangle.fromDegrees(29, 11, 17, 36));
       expect(e.properties.custom_wsenDegrees.getValue(documentStopDate)).toEqual(Rectangle.fromDegrees(37, 16, 25, 23));
     });
+  });
+
+  it("registers custom updaters", () => {
+    function processFakeEntity() {}
+
+    expect(CzmlDataSource.updaters.length)
+      .withContext("length before register")
+      .toEqual(23);
+
+    CzmlDataSource.registerUpdater(processFakeEntity);
+
+    expect(CzmlDataSource.updaters.length)
+      .withContext("length after register")
+      .toEqual(24);
+    expect(CzmlDataSource.updaters[23]).toEqual(processFakeEntity);
+
+    CzmlDataSource.unregisterUpdater(processFakeEntity);
+    expect(CzmlDataSource.updaters.length)
+      .withContext("length after unregister")
+      .toEqual(23);
   });
 });

@@ -132,6 +132,38 @@ function VoxelPrimitive(options) {
   this._maxBoundsOld = new Cartesian3();
 
   /**
+   * Minimum bounds with vertical exaggeration applied
+   *
+   * @type {Cartesian3}
+   * @private
+   */
+  this._exaggeratedMinBounds = new Cartesian3();
+
+  /**
+   * Used to detect if the shape is dirty.
+   *
+   * @type {Cartesian3}
+   * @private
+   */
+  this._exaggeratedMinBoundsOld = new Cartesian3();
+
+  /**
+   * Maximum bounds with vertical exaggeration applied
+   *
+   * @type {Cartesian3}
+   * @private
+   */
+  this._exaggeratedMaxBounds = new Cartesian3();
+
+  /**
+   * Used to detect if the shape is dirty.
+   *
+   * @type {Cartesian3}
+   * @private
+   */
+  this._exaggeratedMaxBoundsOld = new Cartesian3();
+
+  /**
    * This member is not known until the provider is ready.
    *
    * @type {Cartesian3}
@@ -288,12 +320,6 @@ function VoxelPrimitive(options) {
    */
   this._transformNormalLocalToWorld = new Matrix3();
 
-  /**
-   * @type {number}
-   * @private
-   */
-  this._stepSizeUv = 1.0;
-
   // Rendering
   /**
    * @type {boolean}
@@ -442,6 +468,7 @@ function initialize(primitive, provider) {
   // Create the shape object, and update it so it is valid for VoxelTraversal
   const ShapeConstructor = VoxelShapeType.getShapeConstructor(shapeType);
   primitive._shape = new ShapeConstructor();
+  updateVerticalExaggeration(primitive);
   primitive._shapeVisible = updateShapeAndTransforms(
     primitive,
     primitive._shape,
@@ -498,7 +525,7 @@ Object.defineProperties(VoxelPrimitive.prototype, {
    */
   orientedBoundingBox: {
     get: function () {
-      return this.shape.orientedBoundingBox;
+      return this._shape.orientedBoundingBox;
     },
   },
 
@@ -964,6 +991,8 @@ VoxelPrimitive.prototype.update = function (frameState) {
     return;
   }
 
+  updateVerticalExaggeration(this, frameState);
+
   // Check if the shape is dirty before updating it. This needs to happen every
   // frame because the member variables can be modified externally via the
   // getters.
@@ -1097,15 +1126,43 @@ VoxelPrimitive.prototype.update = function (frameState) {
     cameraPositionWorld,
     uniforms.cameraPositionUv
   );
-  uniforms.stepSize = this._stepSizeUv * this._stepSizeMultiplier;
+  uniforms.stepSize = this._stepSizeMultiplier;
 
   // Render the primitive
   const command = frameState.passes.pick
     ? this._drawCommandPick
+    : frameState.passes.pickVoxel
+    ? this._drawCommandPickVoxel
     : this._drawCommand;
   command.boundingVolume = shape.boundingSphere;
   frameState.commandList.push(command);
 };
+
+/**
+ * Update the exaggerated bounds of a primitive to account for vertical exaggeration
+ * Currently only applies to Ellipsoid shape type
+ * @param {VoxelPrimitive} primitive
+ * @param {FrameState} [frameState]
+ * @private
+ */
+function updateVerticalExaggeration(primitive, frameState) {
+  primitive._exaggeratedMinBounds = Cartesian3.clone(
+    primitive._minBounds,
+    primitive._exaggeratedMinBounds
+  );
+  primitive._exaggeratedMaxBounds = Cartesian3.clone(
+    primitive._maxBounds,
+    primitive._exaggeratedMaxBounds
+  );
+  if (defined(frameState) && primitive.shape === VoxelShapeType.ELLIPSOID) {
+    const relativeHeight = frameState.verticalExaggerationRelativeHeight;
+    const exaggeration = frameState.verticalExaggeration;
+    primitive._exaggeratedMinBounds.z =
+      (primitive._minBounds.z - relativeHeight) * exaggeration + relativeHeight;
+    primitive._exaggeratedMaxBounds.z =
+      (primitive._maxBounds.z - relativeHeight) * exaggeration + relativeHeight;
+  }
+}
 
 /**
  * Initialize primitive properties that are derived from the voxel provider
@@ -1203,6 +1260,16 @@ function checkTransformAndBounds(primitive, provider) {
     updateBound(primitive, "_compoundModelMatrix", "_compoundModelMatrixOld") +
     updateBound(primitive, "_minBounds", "_minBoundsOld") +
     updateBound(primitive, "_maxBounds", "_maxBoundsOld") +
+    updateBound(
+      primitive,
+      "_exaggeratedMinBounds",
+      "_exaggeratedMinBoundsOld"
+    ) +
+    updateBound(
+      primitive,
+      "_exaggeratedMaxBounds",
+      "_exaggeratedMaxBoundsOld"
+    ) +
     updateBound(primitive, "_minClippingBounds", "_minClippingBoundsOld") +
     updateBound(primitive, "_maxClippingBounds", "_maxClippingBoundsOld");
   return numChanges > 0;
@@ -1239,8 +1306,8 @@ function updateBound(primitive, newBoundKey, oldBoundKey) {
 function updateShapeAndTransforms(primitive, shape, provider) {
   const visible = shape.update(
     primitive._compoundModelMatrix,
-    primitive.minBounds,
-    primitive.maxBounds,
+    primitive._exaggeratedMinBounds,
+    primitive._exaggeratedMaxBounds,
     primitive.minClippingBounds,
     primitive.maxClippingBounds
   );
@@ -1272,8 +1339,6 @@ function updateShapeAndTransforms(primitive, shape, provider) {
   );
 
   // Set member variables when the shape is dirty
-  const dimensions = provider.dimensions;
-  primitive._stepSizeUv = shape.computeApproximateStepSize(dimensions);
   primitive._transformPositionWorldToUv = Matrix4.multiplyTransformation(
     transformPositionLocalToUv,
     transformPositionWorldToLocal,
