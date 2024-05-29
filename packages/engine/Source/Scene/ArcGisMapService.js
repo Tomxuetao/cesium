@@ -4,7 +4,7 @@ import Resource from "../Core/Resource.js";
 
 let defaultTokenCredit;
 const defaultAccessToken =
-  "AAPKc6e43bbc520149f79229d173c04883558jat1YV8r6Xjl50ulCDeLTkHzW0vzUC-9m6ASQvGmPbo4-xY_kAzsJxJZm-j_Unr";
+  "AAPK809db8a668914f14bf886dcf16d4dc82Hm5SsO4xOJY2n4-V_ypQyxlGKJRQugNnPIslyTLkk5-HHQl9BRpgdNXaKNGe7oxx";
 /**
  * Default options for accessing the ArcGIS image tile service.
  *

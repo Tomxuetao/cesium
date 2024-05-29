@@ -28,7 +28,7 @@ import VerticalOrigin from "./VerticalOrigin.js";
  * Initialization options for the first param of Billboard constructor
  *
  * @property {Cartesian3} position The cartesian position of the billboard.
- * @property {string} [id] A user-defined object to return when the billboard is picked with {@link Scene#pick}.
+ * @property {*} [id] A user-defined object to return when the billboard is picked with {@link Scene#pick}.
  * @property {boolean} [show=true] Determines if this billboard will be shown.
  * @property {string | HTMLCanvasElement} [image] A loaded HTMLImageElement, ImageData, or a url to an image to use for the billboard.
  * @property {number} [scale=1.0] A number specifying the uniform scale that is multiplied with the billboard's image size in pixels.
@@ -892,7 +892,7 @@ Object.defineProperties(Billboard.prototype, {
   /**
    * Gets or sets the user-defined object returned when the billboard is picked.
    * @memberof Billboard.prototype
-   * @type {object}
+   * @type {*}
    */
   id: {
     get: function () {
@@ -1139,7 +1139,7 @@ Billboard._updateClamping = function (collection, owner) {
   }
 
   function updateFunction(clampedPosition) {
-    owner._clampedPosition = ellipsoid.cartographicToCartesian(
+    const updatedClampedPosition = ellipsoid.cartographicToCartesian(
       clampedPosition,
       owner._clampedPosition
     );
@@ -1149,12 +1149,14 @@ Billboard._updateClamping = function (collection, owner) {
         clampedPosition.height += position.height;
         ellipsoid.cartographicToCartesian(
           clampedPosition,
-          owner._clampedPosition
+          updatedClampedPosition
         );
       } else {
-        owner._clampedPosition.x += position.height;
+        updatedClampedPosition.x += position.height;
       }
     }
+
+    owner._clampedPosition = updatedClampedPosition;
   }
 
   owner._removeCallbackFunc = scene.updateHeight(
