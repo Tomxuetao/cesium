@@ -1,6 +1,5 @@
 import {
   Credit,
-  defaultValue,
   IonResource,
   RequestScheduler,
   Resource,
@@ -19,12 +18,12 @@ import {
 
 describe("Scene/IonImageryProvider", function () {
   async function createTestProviderAsync(endpointData) {
-    endpointData = defaultValue(endpointData, {
+    endpointData = endpointData ?? {
       type: "IMAGERY",
       url: "http://test.invalid/layer",
       accessToken: "not_really_a_refresh_token",
       attributions: [],
-    });
+    };
 
     const assetId = 12335;
     const options = {};
@@ -232,15 +231,27 @@ describe("Scene/IonImageryProvider", function () {
   });
 
   it("createImageryProvider works with BING", function () {
-    spyOn(Resource._Implementations, "loadAndExecuteScript").and.callFake(
-      function (url, name, deffered) {
-        deffered.resolve({
-          resourceSets: [
-            {
-              resources: [{ imageUrl: "", imageUrlSubdomains: [], zoomMax: 0 }],
-            },
-          ],
-        });
+    spyOn(Resource._Implementations, "loadWithXhr").and.callFake(
+      function (
+        url,
+        responseType,
+        method,
+        data,
+        headers,
+        deferred,
+        overrideMimeType,
+      ) {
+        deferred.resolve(
+          JSON.stringify({
+            resourceSets: [
+              {
+                resources: [
+                  { imageUrl: "", imageUrlSubdomains: [], zoomMax: 0 },
+                ],
+              },
+            ],
+          }),
+        );
       },
     );
     return testExternalImagery(
