@@ -13,7 +13,6 @@ import EncodedCartesian3 from "../Core/EncodedCartesian3.js";
 import IndexDatatype from "../Core/IndexDatatype.js";
 import CesiumMath from "../Core/Math.js";
 import Matrix4 from "../Core/Matrix4.js";
-import WebGLConstants from "../Core/WebGLConstants.js";
 import Buffer from "../Renderer/Buffer.js";
 import BufferUsage from "../Renderer/BufferUsage.js";
 import ContextLimits from "../Renderer/ContextLimits.js";
@@ -34,6 +33,9 @@ import SceneMode from "./SceneMode.js";
 import SDFSettings from "./SDFSettings.js";
 import TextureAtlas from "../Renderer/TextureAtlas.js";
 import VerticalOrigin from "./VerticalOrigin.js";
+import Ellipsoid from "../Core/Ellipsoid.js";
+import WebGLConstants from "../Core/WebGLConstants.js";
+import deprecationWarning from "../Core/deprecationWarning.js";
 
 const SHOW_INDEX = Billboard.SHOW_INDEX;
 const POSITION_INDEX = Billboard.POSITION_INDEX;
@@ -128,7 +130,7 @@ const attributeLocationsInstanced = {
  * @see Billboard
  * @see LabelCollection
  *
- * @demo {@link https://sandcastle.cesium.com/index.html?src=Billboards.html|Cesium Sandcastle Billboard Demo}
+ * @demo {@link https://sandcastle.cesium.com/index.html?id=billboards|Cesium Sandcastle Billboard Demo}
  *
  * @example
  * // Create a billboard collection with two billboards
@@ -315,6 +317,8 @@ function BillboardCollection(options) {
   ];
 
   this._highlightColor = Color.clone(Color.WHITE); // Only used by Vector3DTilePoints
+  this._coarseDepthTestDistance = Ellipsoid.default.minimumRadius / 100;
+  this._threePointDepthTestDistance = Ellipsoid.default.minimumRadius / 1000;
 
   this._uniforms = {
     u_atlas: () => {
@@ -322,6 +326,16 @@ function BillboardCollection(options) {
     },
     u_highlightColor: () => {
       return this._highlightColor;
+    },
+    // An eye-space distance, beyond which, the billboard is simply tested against a camera-facing plane at the ellipsoid's center,
+    // rather than against a depth texture. Note: only if the disableDepthTestingDistance property permits.
+    u_coarseDepthTestDistance: () => {
+      return this._coarseDepthTestDistance;
+    },
+    // Within this distance, if the billboard is clamped to the ground, we'll depth-test 3 key points.
+    // If any key point is visible, the whole billboard will be visible.
+    u_threePointDepthTestDistance: () => {
+      return this._threePointDepthTestDistance;
     },
   };
 
@@ -1020,13 +1034,20 @@ function writeCompressedAttrib0(
     Math.floor(
       CesiumMath.clamp(pixelOffsetY, -UPPER_BOUND, UPPER_BOUND) + UPPER_BOUND,
     ) * LEFT_SHIFT8;
+
+  // We scale `translate` by LEFT_SHIFT2 before encoding it (and unscale after decoding in the shader)
+  // to preserve some subpixel precision (1 / 4 = 0.25 pixels). This mitigates rounding errors in aligning glyphs.
+  // The cost of increasing this scaling factor is that it decreases the range of representable `translate` values
+  // by the same scaling factor. Value must be kept in sync with the shader.
   let compressed2 =
     Math.floor(
-      CesiumMath.clamp(translateX, -UPPER_BOUND, UPPER_BOUND) + UPPER_BOUND,
+      CesiumMath.clamp(translateX * LEFT_SHIFT2, -UPPER_BOUND, UPPER_BOUND) +
+        UPPER_BOUND,
     ) * LEFT_SHIFT8;
 
   const tempTanslateY =
-    (CesiumMath.clamp(translateY, -UPPER_BOUND, UPPER_BOUND) + UPPER_BOUND) *
+    (CesiumMath.clamp(translateY * LEFT_SHIFT2, -UPPER_BOUND, UPPER_BOUND) +
+      UPPER_BOUND) *
     RIGHT_SHIFT8;
   const upperTranslateY = Math.floor(tempTanslateY);
   const lowerTranslateY = Math.floor(
@@ -1183,22 +1204,14 @@ function writeCompressedAttrib2(
   );
   let labelHorizontalOrigin = billboard._labelHorizontalOrigin ?? -2;
   labelHorizontalOrigin += 2;
-  const compressed3 = imageHeight * LEFT_SHIFT2 + labelHorizontalOrigin;
 
-  let red = Color.floatToByte(color.red);
-  let green = Color.floatToByte(color.green);
-  let blue = Color.floatToByte(color.blue);
-  const compressed0 = red * LEFT_SHIFT16 + green * LEFT_SHIFT8 + blue;
-
-  red = Color.floatToByte(pickColor.red);
-  green = Color.floatToByte(pickColor.green);
-  blue = Color.floatToByte(pickColor.blue);
-  const compressed1 = red * LEFT_SHIFT16 + green * LEFT_SHIFT8 + blue;
-
-  let compressed2 =
+  const compressed0 = AttributeCompression.encodeRGB8(color);
+  const compressed1 = AttributeCompression.encodeRGB8(pickColor);
+  const compressed2 =
     Color.floatToByte(color.alpha) * LEFT_SHIFT16 +
-    Color.floatToByte(pickColor.alpha) * LEFT_SHIFT8;
-  compressed2 += sizeInMeters * 2.0 + validAlignedAxis;
+    Color.floatToByte(pickColor.alpha) * LEFT_SHIFT8 +
+    (sizeInMeters * 2.0 + validAlignedAxis);
+  const compressed3 = imageHeight * LEFT_SHIFT2 + labelHorizontalOrigin;
 
   if (billboardCollection._instanced) {
     i = billboard._index;
@@ -1365,9 +1378,6 @@ function writeCompressedAttribute3(
   const clampToGround =
     isHeightReferenceClamp(billboard.heightReference) &&
     frameState.context.depthTexture;
-  if (!defined(disableDepthTestDistance)) {
-    disableDepthTestDistance = clampToGround ? 5000.0 : 0.0;
-  }
 
   disableDepthTestDistance *= disableDepthTestDistance;
   if (clampToGround || disableDepthTestDistance > 0.0) {
@@ -1508,10 +1518,7 @@ function writeSDF(billboardCollection, frameState, vafWriters, billboard) {
   const outlineColor = billboard.outlineColor;
   const outlineWidth = billboard.outlineWidth;
 
-  const red = Color.floatToByte(outlineColor.red);
-  const green = Color.floatToByte(outlineColor.green);
-  const blue = Color.floatToByte(outlineColor.blue);
-  const compressed0 = red * LEFT_SHIFT16 + green * LEFT_SHIFT8 + blue;
+  const compressed0 = AttributeCompression.encodeRGB8(outlineColor);
 
   // Compute the relative outline distance
   const outlineDistance = outlineWidth / SDFSettings.RADIUS;
@@ -1767,6 +1774,19 @@ BillboardCollection.prototype.update = function (frameState) {
   }
 
   const context = frameState.context;
+
+  if (
+    !context.instancedArrays ||
+    !(ContextLimits.maximumVertexTextureImageUnits > 0)
+  ) {
+    deprecationWarning(
+      "Billboard-unsupported-ANGLE_instanced_arrays",
+      "Beginning in CesiumJS 1.140, billboards and labels will require device support for WebGL 2, " +
+        "or WebGL 1 with ANGLE_instanced_arrays and MAX_VERTEX_TEXTURE_IMAGE_UNITS > 0. For more " +
+        "information or to share feedback, see: https://github.com/CesiumGS/cesium/issues/13053",
+    );
+  }
+
   this._instanced = context.instancedArrays;
   attributeLocations = this._instanced
     ? attributeLocationsInstanced
@@ -2035,7 +2055,6 @@ BillboardCollection.prototype.update = function (frameState) {
     // If OPAQUE_AND_TRANSLUCENT is in use, only the opaque pass gets the benefit of the depth buffer,
     // not the translucent pass.  Otherwise, if the TRANSLUCENT pass is on its own, it turns on
     // a depthMask in lieu of full depth sorting (because it has opaque-ish fragments that look bad in OIT).
-    // When the TRANSLUCENT depth mask is in use, label backgrounds require the depth func to be LEQUAL.
     const useTranslucentDepthMask =
       this._blendOption === BlendOption.TRANSLUCENT;
 
@@ -2134,9 +2153,9 @@ BillboardCollection.prototype.update = function (frameState) {
     }
     if (this._shaderClampToGround) {
       if (supportVSTextureReads) {
-        vs.defines.push("VERTEX_DEPTH_CHECK");
+        vs.defines.push("VS_THREE_POINT_DEPTH_CHECK");
       } else {
-        vs.defines.push("FRAGMENT_DEPTH_CHECK");
+        vs.defines.push("FS_THREE_POINT_DEPTH_CHECK");
       }
     }
 
@@ -2155,9 +2174,9 @@ BillboardCollection.prototype.update = function (frameState) {
       });
       if (this._shaderClampToGround) {
         if (supportVSTextureReads) {
-          fs.defines.push("VERTEX_DEPTH_CHECK");
+          fs.defines.push("VS_THREE_POINT_DEPTH_CHECK");
         } else {
-          fs.defines.push("FRAGMENT_DEPTH_CHECK");
+          fs.defines.push("FS_THREE_POINT_DEPTH_CHECK");
         }
       }
 
@@ -2180,9 +2199,9 @@ BillboardCollection.prototype.update = function (frameState) {
       });
       if (this._shaderClampToGround) {
         if (supportVSTextureReads) {
-          fs.defines.push("VERTEX_DEPTH_CHECK");
+          fs.defines.push("VS_THREE_POINT_DEPTH_CHECK");
         } else {
-          fs.defines.push("FRAGMENT_DEPTH_CHECK");
+          fs.defines.push("FS_THREE_POINT_DEPTH_CHECK");
         }
       }
       if (this._sdf) {
@@ -2205,9 +2224,9 @@ BillboardCollection.prototype.update = function (frameState) {
       });
       if (this._shaderClampToGround) {
         if (supportVSTextureReads) {
-          fs.defines.push("VERTEX_DEPTH_CHECK");
+          fs.defines.push("VS_THREE_POINT_DEPTH_CHECK");
         } else {
-          fs.defines.push("FRAGMENT_DEPTH_CHECK");
+          fs.defines.push("FS_THREE_POINT_DEPTH_CHECK");
         }
       }
       if (this._sdf) {
@@ -2230,9 +2249,9 @@ BillboardCollection.prototype.update = function (frameState) {
       });
       if (this._shaderClampToGround) {
         if (supportVSTextureReads) {
-          fs.defines.push("VERTEX_DEPTH_CHECK");
+          fs.defines.push("VS_THREE_POINT_DEPTH_CHECK");
         } else {
-          fs.defines.push("FRAGMENT_DEPTH_CHECK");
+          fs.defines.push("FS_THREE_POINT_DEPTH_CHECK");
         }
       }
       if (this._sdf) {

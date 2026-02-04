@@ -4,7 +4,6 @@ import Frozen from "../Core/Frozen.js";
 import defined from "../Core/defined.js";
 import DeveloperError from "../Core/DeveloperError.js";
 import Event from "../Core/Event.js";
-import Rectangle from "../Core/Rectangle.js";
 import Resource from "../Core/Resource.js";
 import WebMercatorTilingScheme from "../Core/WebMercatorTilingScheme.js";
 import ImageryProvider from "./ImageryProvider.js";
@@ -52,7 +51,7 @@ const defaultParameters = Object.freeze({
  *
  * @param {WebMapTileServiceImageryProvider.ConstructorOptions} options Object describing initialization options
  *
- * @demo {@link https://sandcastle.cesium.com/index.html?src=Web%20Map%20Tile%20Service%20with%20Time.html|Cesium Sandcastle Web Map Tile Service with Time Demo}
+ * @demo {@link https://sandcastle.cesium.com/index.html?id=web-map-tile-service-with-time|Cesium Sandcastle Web Map Tile Service with Time Demo}
  *
  * @example
  * // Example 1. USGS shaded relief tiles (KVP)
@@ -207,27 +206,6 @@ function WebMapTileServiceImageryProvider(options) {
       },
     });
   }
-
-  // Check the number of tiles at the minimum level.  If it's more than four,
-  // throw an exception, because starting at the higher minimum
-  // level will cause too many tiles to be downloaded and rendered.
-  const swTile = this._tilingScheme.positionToTileXY(
-    Rectangle.southwest(this._rectangle),
-    this._minimumLevel,
-  );
-  const neTile = this._tilingScheme.positionToTileXY(
-    Rectangle.northeast(this._rectangle),
-    this._minimumLevel,
-  );
-  const tileCount =
-    (Math.abs(neTile.x - swTile.x) + 1) * (Math.abs(neTile.y - swTile.y) + 1);
-  //>>includeStart('debug', pragmas.debug);
-  if (tileCount > 4) {
-    throw new DeveloperError(
-      `The imagery provider's rectangle and minimumLevel indicate that there are ${tileCount} tiles at the minimum level. Imagery providers with more than four tiles at the minimum level are not supported.`,
-    );
-  }
-  //>>includeEnd('debug');
 
   this._errorEvent = new Event();
 
